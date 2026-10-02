@@ -47,65 +47,119 @@ DIR_RAW = Path(__file__).resolve().parent.parent / "data" / "raw"
 
 
 def baixar_html(url: str, dados_post: dict | None = None) -> str:
-    """Baixa uma página e devolve o HTML.
 
-    Use POST (passando `dados_post`) quando a página só devolver o conteúdo
-    que você quer em resposta a um formulário; GET no resto.
-
-    TODO: fazer a requisição com `requests`, checar o status e devolver o texto.
-    Dica: `resp.raise_for_status()` falha alto quando o servidor recusa.
-    """
-    raise NotImplementedError
+    if dados_post is None:
+        resp = requests.get(url, headers=HEADERS)
+    else:
+        resp = requests.post(url, headers=HEADERS, data=dados_post)
+    resp.raise_for_status()
+    return resp.text
 
 
 def parsear_mares(html: str, ano: int, mes: int) -> list[dict]:
-    """Extrai da tábua mensal uma linha por evento de maré.
+    soup = BeautifulSoup(html, "html.parser")
+    tabela = soup.find("table", id="tabla_mareas")
+    eventos = []
 
-    Cada dia tem cerca de 4 eventos (duas altas, duas baixas). Além de
-    horário e altura, a página traz informação de coeficiente de maré e de
-    fase da lua — decida o que vale a pena capturar.
+    # Só a primeira <tr> de cada dia tem onclick="Day('2026-09-1')".
+    for linha in tabela.find_all("tr", onclick=True):
+        ano_linha, mes_linha, dia = linha["onclick"].split("'")[1].split("-")
+        if int(ano_linha) != ano or int(mes_linha) != mes:
+            continue
 
-    TODO: localizar a tabela no HTML e percorrer as linhas.
-    """
-    raise NotImplementedError
+        # Cada <td> desta classe é uma maré do dia.
+        for celula in linha.find_all("td", class_="tabla_mareas_marea"):
+            hora = celula.find("div", class_="tabla_mareas_marea_hora")
+            if hora is None:  # dias com só 3 marés têm uma célula vazia
+                continue
+            altura = celula.find("span", class_="tabla_mareas_marea_altura_numero")
+            # A div-ícone da maré alta tem a classe "..._pleamar".
+            alta = celula.find("div", class_="tabla_mareas_marea_pleamar")
+
+            eventos.append(
+                {
+                    "data": f"{ano_linha}-{mes_linha}-{dia.zfill(2)}",
+                    "hora": hora.get_text(strip=True),
+                    "altura": altura.get_text(strip=True),
+                    "tipo": "preamar" if alta else "baixamar",
+                }
+            )
+
+    return eventos
+
+
+MESES = {
+    "JAN": 1, "FEV": 2, "MAR": 3, "ABR": 4, "MAI": 5, "JUN": 6,
+    "JUL": 7, "AGO": 8, "SET": 9, "OUT": 10, "NOV": 11, "DEZ": 12,
+}
 
 
 def parsear_previsao(html: str, ano: int) -> list[dict]:
-    """Extrai leituras horárias das páginas de previsão de onda e de vento.
+    soup = BeautifulSoup(html, "html.parser")
+    previsoes = []
 
-    As duas páginas têm o mesmo layout: um bloco por dia, com uma linha por
-    hora dentro. Uma função só deve dar conta das duas.
+    for ficha in soup.find("div", class_="fichas").find_all("div", class_="ficha"):
+        dia = ficha.find("span", class_="dia").get_text(strip=True)
+        mes = MESES[ficha.find("span", class_="mes").get_text(strip=True)]
+        data = f"{ano}-{mes:02d}-{dia}"
 
-    TODO: percorrer os blocos de dia e, dentro deles, as linhas de hora.
-    Atenção à data: o bloco mostra dia e mês abreviado, sem o ano.
-    """
-    raise NotImplementedError
+        for bloco in ficha.find_all("div", class_="f_temp_horas"):
+            hora, direcao = bloco.find_all("div", class_="f_temp_hora")
+            valor = bloco.find("div", class_="grafico_temp_barra_relleno")
+
+            previsoes.append(
+                {
+                    "data": data,
+                    "hora": hora.get_text(strip=True),
+                    "valor": valor.get_text(strip=True),
+                    "direcao": direcao.get_text(strip=True),
+                }
+            )
+
+    return previsoes
 
 
 def coletar_mares_do_ano(ano: int) -> pd.DataFrame:
-    """Junta os 12 meses da tábua de marés de `ano` num DataFrame.
+    eventos = []
 
-    TODO: iterar de janeiro a dezembro, chamar `baixar_html` + `parsear_mares`
-    e dormir `PAUSA` entre requisições.
-    """
-    raise NotImplementedError
+    for mes in range(1, 13):
+        html = baixar_html(URL_BASE, {"fecha": f"{ano}-{mes:02d}-01"})
+        eventos += parsear_mares(html, ano, mes)
+        time.sleep(PAUSA)
+
+    return pd.DataFrame(eventos)
 
 
 def main(ano: int = 2025) -> None:
     DIR_RAW.mkdir(parents=True, exist_ok=True)
     hoje = datetime.now()
 
-    # TODO: montar os quatro CSVs em DIR_RAW.
-    #
-    #   1. tábua de marés do ano inteiro   -> mares_{ano}.csv
-    #   2. marés do mês corrente           -> mares_previsao.csv
-    #   3. previsão de ondas               -> ondas.csv
-    #   4. previsão de vento               -> vento.csv
-    #
-    # Imprima quantas linhas cada arquivo recebeu: um CSV vazio é o erro mais
-    # comum e o mais silencioso.
-    raise NotImplementedError
+    # 1. marés do ano
+    mares_ano = coletar_mares_do_ano(ano)
+    mares_ano.to_csv(DIR_RAW / f"mares_{ano}.csv", index=False)
+    print(f"mares_{ano}.csv: {len(mares_ano)} linhas")
 
+    # 2. marés do mês
+    html = baixar_html(URL_BASE)
+    mares_mes = pd.DataFrame(parsear_mares(html, hoje.year, hoje.month))
+    mares_mes.to_csv(DIR_RAW / "mares_previsao.csv", index=False)
+    print(f"mares_previsao.csv: {len(mares_mes)} linhas")
+    time.sleep(PAUSA)
+
+    # 3. previsão de ondas
+    html = baixar_html(URL_ONDAS)
+    ondas = pd.DataFrame(parsear_previsao(html, hoje.year))
+    ondas.to_csv(DIR_RAW / "ondas.csv", index=False)
+    print(f"ondas.csv: {len(ondas)} linhas")
+    time.sleep(PAUSA)
+
+
+    # 4. previsão de vento
+    html = baixar_html(URL_VENTO)
+    ventos = pd.DataFrame(parsear_previsao(html, hoje.year))
+    ventos.to_csv(DIR_RAW / "vento.csv", index=False)
+    print(f"vento.csv: {len(ventos)} linhas")
+    time.sleep(PAUSA)
 
 if __name__ == "__main__":
     main()
