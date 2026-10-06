@@ -67,6 +67,16 @@ def parsear_mares(html: str, ano: int, mes: int) -> list[dict]:
         if int(ano_linha) != ano or int(mes_linha) != mes:
             continue
 
+        # Coeficiente: a div tem o número e, aninhada, a palavra ("alto").
+        # stripped_strings devolve os textos em ordem; o primeiro é o número.
+        coef = linha.find("div", class_="tabla_mareas_coeficiente_numero")
+        coeficiente = next(coef.stripped_strings)
+
+        # Fase da lua: é um ícone; a classe "icon-hs19" guarda o número (19).
+        luna = linha.find("td", class_="tabla_mareas_luna")
+        classes = luna.find("span")["class"]
+        fase_lua = [c for c in classes if c.startswith("icon-hs")][0].removeprefix("icon-hs")
+
         # Cada <td> desta classe é uma maré do dia.
         for celula in linha.find_all("td", class_="tabla_mareas_marea"):
             hora = celula.find("div", class_="tabla_mareas_marea_hora")
@@ -82,6 +92,8 @@ def parsear_mares(html: str, ano: int, mes: int) -> list[dict]:
                     "hora": hora.get_text(strip=True),
                     "altura": altura.get_text(strip=True),
                     "tipo": "preamar" if alta else "baixamar",
+                    "coeficiente": coeficiente,
+                    "fase_lua": fase_lua,
                 }
             )
 
@@ -156,9 +168,9 @@ def main(ano: int = 2025) -> None:
 
     # 4. previsão de vento
     html = baixar_html(URL_VENTO)
-    ventos = pd.DataFrame(parsear_previsao(html, hoje.year))
-    ventos.to_csv(DIR_RAW / "vento.csv", index=False)
-    print(f"vento.csv: {len(ventos)} linhas")
+    vento = pd.DataFrame(parsear_previsao(html, hoje.year))
+    vento.to_csv(DIR_RAW / "vento.csv", index=False)
+    print(f"vento.csv: {len(vento)} linhas")
     time.sleep(PAUSA)
 
 if __name__ == "__main__":
