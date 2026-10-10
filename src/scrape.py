@@ -17,7 +17,7 @@ Rodar com: uv run python src/scrape.py
 """
 
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -109,10 +109,14 @@ MESES = {
 def parsear_previsao(html: str, ano: int) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     previsoes = []
+    mes_anterior = 0
 
     for ficha in soup.find("div", class_="fichas").find_all("div", class_="ficha"):
         dia = ficha.find("span", class_="dia").get_text(strip=True)
         mes = MESES[ficha.find("span", class_="mes").get_text(strip=True)]
+        if mes < mes_anterior:
+            ano += 1
+        mes_anterior = mes
         data = f"{ano}-{mes:02d}-{dia}"
 
         for bloco in ficha.find_all("div", class_="f_temp_horas"):
@@ -151,12 +155,17 @@ def main(ano: int = 2025) -> None:
     mares_ano.to_csv(DIR_RAW / f"mares_{ano}.csv", index=False)
     print(f"mares_{ano}.csv: {len(mares_ano)} linhas")
 
-    # 2. marés do mês
-    html = baixar_html(URL_BASE)
-    mares_mes = pd.DataFrame(parsear_mares(html, hoje.year, hoje.month))
+    # 2. marés da janela de previsão: mês corrente e, se os 7 dias virarem o mês, o seguinte
+    ultimo_dia = hoje + timedelta(days=6)
+    meses = sorted({(hoje.year, hoje.month), (ultimo_dia.year, ultimo_dia.month)})
+    eventos_mes = []
+    for a, m in meses:
+        html = baixar_html(URL_BASE, {"fecha": f"{a}-{m:02d}-01"})
+        eventos_mes += parsear_mares(html, a, m)
+        time.sleep(PAUSA)
+    mares_mes = pd.DataFrame(eventos_mes)
     mares_mes.to_csv(DIR_RAW / "mares_previsao.csv", index=False)
     print(f"mares_previsao.csv: {len(mares_mes)} linhas")
-    time.sleep(PAUSA)
 
     # 3. previsão de ondas
     html = baixar_html(URL_ONDAS)
